@@ -141,18 +141,41 @@ class _PipelineCache:
                 "[moebius] WARNUNG: Keine CUDA-GPU gefunden -> CPU-Inferenz. "
                 "Das ist deutlich langsamer (Sekunden bis Minuten pro Bild).\n"
             )
-
-        # --- Integrationspunkt zu Moebius -----------------------------------
-        # Diese Importe/Aufrufe spiegeln infer/infer_moebius.py. Falls die
-        # installierte Moebius-Version andere Namen/Signaturen nutzt, hier
-        # anpassen (und sonst nirgends).
-        from utils_infer import build_pipeline, get_batch_infer_args  # type: ignore
+        else:
+            sys.stderr.write("[moebius] " + gpu_mem_report() + "\n")
 
         weight_path = os.path.join(
             WEIGHT_ROOT, "Moebius", MODEL_VARIANTS[variant],
             "diffusion_pytorch_model.bin",
         )
         model_cfg = os.path.join(MOEBIUS_SRC, "config", "model_cfg", "moebius.yaml")
+        vae_path = os.path.join(WEIGHT_ROOT, "vae")
+
+        # Klar verständliche Fehler, BEVOR Moebius mit kryptischen Meldungen abbricht.
+        if not os.path.isfile(weight_path):
+            raise FileNotFoundError(
+                f"Modellgewicht nicht gefunden: {weight_path}\n"
+                f"Bitte die Gewichte von Hugging Face laden (siehe install_backend.sh). "
+                f"MOEBIUS_WEIGHTS={WEIGHT_ROOT}"
+            )
+        if not os.path.isdir(vae_path):
+            raise FileNotFoundError(
+                f"VAE-Verzeichnis nicht gefunden: {vae_path}\n"
+                f"VAE von huggingface.co/hustvl/PixelHacker/tree/main/vae dorthin laden."
+            )
+        if not os.path.isfile(model_cfg):
+            raise FileNotFoundError(f"Model-Config nicht gefunden: {model_cfg}")
+
+        sys.stderr.write(
+            f"[moebius] Lade Variante '{variant}' (device={self.device})\n"
+            f"[moebius]   weight={weight_path}\n[moebius]   vae={vae_path}\n"
+        )
+
+        # --- Integrationspunkt zu Moebius -----------------------------------
+        # Diese Importe/Aufrufe spiegeln infer/infer_moebius.py. Falls die
+        # installierte Moebius-Version andere Namen/Signaturen nutzt, hier
+        # anpassen (und sonst nirgends).
+        from utils_infer import build_pipeline, get_batch_infer_args  # type: ignore
 
         args = get_batch_infer_args()
         # Pflichtfelder analog zur CLI in infer_moebius.py setzen:
@@ -190,6 +213,53 @@ def device_info() -> str:
     if is_mock():
         return "mock"
     return _CACHE.device
+
+
+def gpu_mem_report() -> str:
+    """Kompakter VRAM-Bericht (für /gpu-Endpoint und Logs)."""
+    if is_mock():
+        return "mock – kein GPU-Speicher belegt"
+    try:
+        import torch
+    except ImportError:
+        return "torch nicht installiert"
+    if not torch.cuda.is_available():
+        return "keine CUDA-GPU sichtbar"
+    i = torch.cuda.current_device()
+    name = torch.cuda.get_device_name(i)
+    free, total = torch.cuda.mem_get_info(i)        # tatsächlich freier/gesamter VRAM
+    reserved = torch.cuda.memory_reserved(i)
+    allocated = torch.cuda.memory_allocated(i)
+    gb = 1024 ** 3
+    return (
+        f"GPU{i} {name}: frei {free/gb:.2f}/{total/gb:.2f} GiB | "
+        f"von diesem Prozess belegt: allocated {allocated/gb:.2f}, "
+        f"reserved {reserved/gb:.2f} GiB"
+    )
+
+
+def gpu_mem_dict() -> dict:
+    if is_mock():
+        return {"mock": True}
+    try:
+        import torch
+    except ImportError:
+        return {"torch": False}
+    if not torch.cuda.is_available():
+        return {"cuda": False}
+    i = torch.cuda.current_device()
+    free, total = torch.cuda.mem_get_info(i)
+    gb = 1024 ** 3
+    return {
+        "cuda": True,
+        "device": torch.cuda.get_device_name(i),
+        "free_gib": round(free / gb, 2),
+        "total_gib": round(total / gb, 2),
+        "process_allocated_gib": round(torch.cuda.memory_allocated(i) / gb, 2),
+        "process_reserved_gib": round(torch.cuda.memory_reserved(i) / gb, 2),
+        "model_loaded": _CACHE._pipe is not None,
+        "loaded_variant": _CACHE._variant,
+    }
 
 
 def run_inpaint(image: Image.Image, mask: Image.Image, params: InpaintParams) -> Image.Image:

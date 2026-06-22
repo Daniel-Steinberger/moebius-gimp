@@ -34,6 +34,7 @@ import base64
 import io
 import os
 import sys
+import traceback
 
 from PIL import Image
 
@@ -113,6 +114,12 @@ def models() -> JSONResponse:
     })
 
 
+@app.get("/gpu")
+def gpu() -> JSONResponse:
+    """VRAM-Status (frei/gesamt + von diesem Prozess belegt)."""
+    return JSONResponse(mb.gpu_mem_dict())
+
+
 @app.post("/inpaint", response_model=InpaintResponse)
 def inpaint(req: InpaintRequest) -> InpaintResponse:
     image = _decode_png(req.image_png_b64)
@@ -128,10 +135,19 @@ def inpaint(req: InpaintRequest) -> InpaintResponse:
     )
     try:
         result = mb.run_inpaint(image, mask, params)
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, FileNotFoundError) as exc:
+        # Erwartbare, gut erklärbare Fehler (fehlende Gewichte, falsche Config …).
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - alles andere als 500 melden
-        raise HTTPException(status_code=500, detail=f"Inferenzfehler: {exc}") from exc
+        # Volles Traceback auf die Server-Konsole, damit die echte Ursache sichtbar ist.
+        tb = traceback.format_exc()
+        sys.stderr.write(tb)
+        sys.stderr.flush()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Inferenzfehler: {type(exc).__name__}: {exc}",
+        ) from exc
 
     return InpaintResponse(image_png_b64=_encode_png(result), device=mb.device_info())
 
