@@ -76,11 +76,14 @@ cd moebius-gimp
 ./server/run_server.sh
 ```
 
-Torch-Backend wählt uv automatisch (`--torch-backend=auto`). Falls die CUDA-/
-Treiberversion nicht zum Moebius-Pin passt, gezielt überschreiben, z. B.:
+Das Skript setzt standardmäßig `TORCH_BACKEND=cu128` – das ist der korrekte
+CUDA-Build für Moebius (torch 2.7.1) auf modernen NVIDIA-GPUs **inkl. Blackwell
+(RTX 50xx)**. Moebius pinnt im Repo fälschlich `torch==2.7.1+cu130` (diesen Build
+gibt es nicht – `cu130` erst ab torch 2.9); das Skript entfernt den Suffix
+automatisch. Für eine andere CUDA-Version gezielt überschreiben, z. B.:
 
 ```bash
-TORCH_BACKEND=cu128 ./install_backend.sh
+TORCH_BACKEND=cu126 ./install_backend.sh
 ```
 
 ### 3. In GIMP benutzen

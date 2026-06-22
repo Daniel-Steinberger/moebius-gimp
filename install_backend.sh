@@ -20,8 +20,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Python 3.12: torch 2.7.x hat KEINE Wheels für 3.13/3.14.
 PYVER="${PYVER:-3.12}"
-TORCH_BACKEND="${TORCH_BACKEND:-auto}"
+# cu128 ist der richtige Build für Moebius (torch 2.7.1) auf modernen NVIDIA-GPUs
+# inkl. Blackwell (RTX 50xx). NICHT 'auto' nehmen: bei sehr neuem Treiber (CUDA 13.x)
+# würde uv cu130 wählen, das es für torch 2.7.1 gar nicht gibt.
+TORCH_BACKEND="${TORCH_BACKEND:-cu128}"
 MOEBIUS_REPO="${MOEBIUS_REPO:-https://github.com/hustvl/Moebius.git}"
 
 command -v uv >/dev/null 2>&1 || {
@@ -45,12 +49,15 @@ fi
 
 echo "[4/4] Moebius-Deps (torch/diffusers …) ins venv installieren (Backend: ${TORCH_BACKEND}) …"
 if [[ -f Moebius/requirements.txt ]]; then
-    # --torch-backend lässt uv den passenden PyTorch-Index wählen (CUDA-Version).
-    # Hinweis: Moebius pinnt evtl. einen exakten +cuXXX-Build. Passt das nicht zur
-    # CUDA-/Treiberversion dieses Rechners, TORCH_BACKEND passend setzen.
+    # Moebius pinnt 'torch==2.7.1+cu130' – diesen Build gibt es NICHT (cu130 erst ab
+    # torch 2.9). Wir strippen den +cuXXX-Suffix; den passenden CUDA-Build wählt dann
+    # uv über --torch-backend (Default cu128, Blackwell-tauglich).
+    SAN="Moebius/requirements.uv.txt"
+    sed -E 's/(^torch==[0-9][0-9.]*)\+cu[0-9]+/\1/' Moebius/requirements.txt > "${SAN}"
+    echo "      bereinigte torch-Zeile: $(grep -E '^torch' "${SAN}")"
     uv pip install --python "${VENV_PY}" \
         --torch-backend="${TORCH_BACKEND}" \
-        -r Moebius/requirements.txt
+        -r "${SAN}"
 else
     echo "      WARNUNG: Moebius/requirements.txt nicht gefunden – bitte manuell prüfen."
 fi
