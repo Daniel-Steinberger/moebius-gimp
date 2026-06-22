@@ -7,26 +7,24 @@ Moebius-Inferenz (https://github.com/hustvl/Moebius, Apache-2.0).
 
 Designentscheidung
 -------------------
-Die Vorverarbeitung (Resize, Normalisierung) und der Pipeline-Aufruf von
-Moebius liegen in Modulen (``utils_infer.py``, ``infer/infer_moebius.py``,
-``utils_dataset``), deren exakte Signatur nicht vollständig öffentlich
-dokumentiert ist. Deshalb wird die *gesamte* Kopplung an Moebius hier in einer
-einzigen Funktion ``run_inpaint(image, mask, params)`` gekapselt. Sollte die
-echte ``pipe(...)``-Signatur der installierten Moebius-Version abweichen, ist
-das die einzige Stelle, die angepasst werden muss.
+Die gesamte Kopplung an Moebius steckt in ``_PipelineCache._build`` (Modell-Bau)
+und ``run_inpaint`` (Aufruf). Verifiziert gegen Moebius (Stand Juni 2026):
 
-Die Logik spiegelt ``infer/infer_moebius.py``:
+* ``build_pipeline`` liegt in ``infer/utils.py`` und braucht nur
+  ``model_config``, ``model_weight`` und ``device``.
+* Das Ergebnis ist eine ``removal.v1_2.pipeline.RemovalSDXLPipeline_BatchMode``.
+  Deren ``__call__(input_image_list, input_mask_list, image_size=512,
+  num_steps, guidance_scale, paste, compensate, noise_offset, …)`` nimmt
+  Listen von **PIL-Bildern** und liefert eine Liste von **PIL-Ergebnissen**
+  (kein Dataloader nötig).
+* Maskenpolarität: weiß (255) = neu füllen (intern ``masked = image*(1-mask)``).
+* ``moebius.yaml`` referenziert das VAE relativ (``./weight/vae``) -> beim
+  Modell-Bau wird ins Moebius-Verzeichnis gewechselt.
 
-    pipe = build_pipeline(args)
-    pipe = functools.partial(
-        pipe,
-        guidance_scale=args.cfg,
-        paste=args.pst,
-        compensate=args.cps,
-        num_steps=args.num_step,
-        noise_offset=args.noise_offset,
-    )
-    out = pipe([image], [mask])[0]
+    args = SimpleNamespace(model_config=..., model_weight=..., device=...)
+    pipe = build_pipeline(args)               # einmal, gecacht
+    out  = pipe([image], [mask], image_size=512, num_steps=..., guidance_scale=...,
+                paste=..., compensate=..., noise_offset=...)[0]
 
 Mock-Modus
 ----------
@@ -39,11 +37,11 @@ GIMP -> HTTP -> Server -> GIMP ohne torch/GPU testen.
 
 from __future__ import annotations
 
-import functools
 import os
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Optional
 
 from PIL import Image
@@ -83,12 +81,13 @@ DEFAULT_VARIANT = "places2"
 @dataclass
 class InpaintParams:
     """Vom Client (GIMP-Plugin) übergebene Inferenz-Parameter."""
+    # Defaults entsprechen den Moebius-Inferenz-Defaults (infer/utils.py).
     model: str = DEFAULT_VARIANT
-    cfg: float = 1.0          # guidance_scale
+    cfg: float = 2.5          # guidance_scale
     num_steps: int = 20       # Anzahl Diffusionsschritte
     paste: bool = True        # Original außerhalb der Maske wieder einsetzen
-    compensate: bool = True   # Farb-/Helligkeitskompensation
-    noise_offset: float = 0.0
+    compensate: bool = False  # Farb-/Helligkeitskompensation
+    noise_offset: float = 0.0357
 
 
 # ---------------------------------------------------------------------------
@@ -172,29 +171,31 @@ class _PipelineCache:
         )
 
         # --- Integrationspunkt zu Moebius -----------------------------------
-        # Diese Importe/Aufrufe spiegeln infer/infer_moebius.py. Falls die
-        # installierte Moebius-Version andere Namen/Signaturen nutzt, hier
-        # anpassen (und sonst nirgends).
-        from utils_infer import build_pipeline, get_batch_infer_args  # type: ignore
+        # build_pipeline liegt in infer/utils.py (Paket 'infer') und braucht nur
+        # model_config, model_weight und device. Das Ergebnis ist eine
+        # RemovalSDXLPipeline_BatchMode, deren __call__ direkt Listen von
+        # PIL-Bildern annimmt (siehe run_inpaint). Die Sampling-Parameter
+        # (cfg, num_steps, paste, …) werden NICHT hier, sondern pro Request im
+        # pipe(...)-Aufruf übergeben.
+        from infer.utils import build_pipeline  # type: ignore
 
-        args = get_batch_infer_args()
-        # Pflichtfelder analog zur CLI in infer_moebius.py setzen:
-        args.model_config = model_cfg
-        args.model_weight = weight_path
-        if hasattr(args, "vae"):
-            args.vae = os.path.join(WEIGHT_ROOT, "vae")
-        if hasattr(args, "device"):
-            args.device = self.device
-
-        pipe = build_pipeline(args)
-        pipe = functools.partial(
-            pipe,
-            guidance_scale=getattr(args, "cfg", 1.0),
-            paste=getattr(args, "pst", True),
-            compensate=getattr(args, "cps", True),
-            num_steps=getattr(args, "num_step", 20),
-            noise_offset=getattr(args, "noise_offset", 0.0),
+        args = SimpleNamespace(
+            model_config=model_cfg,
+            model_weight=weight_path,
+            device=self.device,
         )
+
+        # moebius.yaml referenziert das VAE relativ als './weight/vae'. Für den
+        # Modell-Bau deshalb ins Moebius-Verzeichnis wechseln (sonst FileNotFound).
+        # Danach cwd wiederherstellen – die Inferenz selbst braucht keinen cwd.
+        prev_cwd = os.getcwd()
+        os.chdir(MOEBIUS_SRC)
+        try:
+            pipe = build_pipeline(args)
+        finally:
+            os.chdir(prev_cwd)
+
+        sys.stderr.write("[moebius] Modell geladen. " + gpu_mem_report() + "\n")
         return pipe
 
 
@@ -277,20 +278,26 @@ def run_inpaint(image: Image.Image, mask: Image.Image, params: InpaintParams) ->
         return _mock_inpaint(image, mask)
 
     # --- echter Moebius-Aufruf ------------------------------------------------
+    # RemovalSDXLPipeline_BatchMode.__call__(input_image_list, input_mask_list,
+    #   image_size=512, num_steps, guidance_scale, paste, compensate, noise_offset, …)
+    # nimmt Listen von PIL-Bildern und liefert eine Liste von PIL-Ergebnissen.
+    # Die Maske wird intern auf image_size skaliert/binarisiert; weiß = füllen.
+    # Die Inferenz wird serialisiert (eine GPU, ein Modell im Cache).
     pipe = _CACHE.get(params.model)
-    # Parameter pro Aufruf überschreiben (functools.partial-Defaults).
-    out = pipe(
-        [image],
-        [mask],
-        guidance_scale=params.cfg,
-        paste=params.paste,
-        compensate=params.compensate,
-        num_steps=params.num_steps,
-        noise_offset=params.noise_offset,
-    )
+    with _CACHE._lock:
+        out = pipe(
+            [image],
+            [mask],
+            image_size=512,
+            num_steps=params.num_steps,
+            guidance_scale=params.cfg,
+            paste=params.paste,
+            compensate=params.compensate,
+            noise_offset=params.noise_offset,
+        )
     result = out[0] if isinstance(out, (list, tuple)) else out
     if not isinstance(result, Image.Image):
-        # Moebius könnte einen Tensor/ndarray zurückgeben -> nach PIL wandeln.
+        # Falls Moebius einen Tensor/ndarray zurückgibt -> nach PIL wandeln.
         result = _to_pil(result)
     return result.convert("RGB")
 

@@ -60,11 +60,11 @@ class InpaintRequest(BaseModel):
     image_png_b64: str = Field(..., description="Quellbild als base64-kodiertes PNG")
     mask_png_b64: str = Field(..., description="Maske als base64-PNG, weiß=füllen")
     model: str = Field(mb.DEFAULT_VARIANT, description="Modell-Variante")
-    cfg: float = Field(1.0, description="Guidance scale")
+    cfg: float = Field(2.5, description="Guidance scale")
     num_steps: int = Field(20, ge=1, le=200)
     paste: bool = True
-    compensate: bool = True
-    noise_offset: float = 0.0
+    compensate: bool = False
+    noise_offset: float = 0.0357
 
 
 class InpaintResponse(BaseModel):

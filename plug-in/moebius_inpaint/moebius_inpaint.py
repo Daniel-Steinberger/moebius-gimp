@@ -240,8 +240,8 @@ class MoebiusInpaint(Gimp.PlugIn):
 
         procedure.add_double_argument(
             "cfg", "_Guidance (cfg)",
-            "Classifier-free-Guidance-Skala",
-            0.0, 20.0, 1.0, rw,
+            "Classifier-free-Guidance-Skala (Moebius-Default 2.5)",
+            0.0, 20.0, 2.5, rw,
         )
         procedure.add_int_argument(
             "num-steps", "_Schritte",
@@ -256,7 +256,7 @@ class MoebiusInpaint(Gimp.PlugIn):
         procedure.add_boolean_argument(
             "compensate", "_Compensate (Farbangleich)",
             "Farb-/Helligkeitskompensation aktivieren",
-            True, rw,
+            False, rw,
         )
         procedure.add_int_argument(
             "timeout", "_Timeout (s)",
