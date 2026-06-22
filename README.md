@@ -30,9 +30,16 @@ GPU-Maschine.
 | `plug-in/moebius_inpaint/moebius_inpaint.py` | Das GIMP-Plugin |
 | `server/server.py` | FastAPI-Server (`/inpaint`, `/health`, `/models`) |
 | `server/moebius_backend.py` | Adapter zur Moebius-Inferenz (+ `--mock`) |
+| `pyproject.toml` / `uv.lock` | Server-Abhängigkeiten (von **uv** verwaltet) |
 | `install_plugin.sh` | Plugin ins GIMP-User-Verzeichnis kopieren |
-| `install_backend.sh` | venv + Moebius + Deps einrichten |
-| `server/run_server.sh` | Server starten |
+| `install_backend.sh` | venv (uv) + Moebius + Deps einrichten |
+| `server/run_server.sh` | Server starten (`uv run`) |
+| `scripts/remote_probe.sh` | GPU-Rechner diagnostizieren (CUDA/Python/uv) |
+
+> **Abhängigkeiten:** Das Projekt nutzt [**uv**](https://docs.astral.sh/uv/).
+> Die Server-Deps stehen in `pyproject.toml` (kein `requirements.txt` mehr).
+> Wichtig: torch 2.7.x hat **keine** Wheels für Python 3.13/3.14 – das Backend-venv
+> wird deshalb mit Python **3.12** erzeugt (uv lädt es bei Bedarf selbst).
 
 ## Schnellstart
 
@@ -42,15 +49,16 @@ GPU-Maschine.
 ./install_plugin.sh
 ```
 
-Installiert nach `~/.config/GIMP/3.0/plug-ins/moebius_inpaint/`. GIMP neu starten.
+Installiert ins versionsrichtige Verzeichnis (z. B. `~/.config/GIMP/3.2/plug-ins/`,
+abgeleitet aus `gimp --version`). GIMP neu starten.
 
 ### 2a. Schnelltest ohne GPU/Modell (Mock)
 
-Auf demselben Rechner – braucht nur `fastapi`/`uvicorn`/`pillow`:
+Braucht nur die leichten Server-Deps (kein torch) – läuft auf jedem Python ≥3.10:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r server/requirements.txt
+uv run --no-sync python server/server.py --mock
+# oder gleichwertig:
 ./server/run_server.sh --mock
 ```
 
@@ -58,12 +66,21 @@ Der Mock-Server liefert das Originalbild mit rot markiertem Auswahlbereich
 zurück – damit lässt sich der gesamte Pfad GIMP → Server → GIMP prüfen, bevor
 das echte Modell installiert ist.
 
-### 2b. Echtes Inpainting (auf GPU-Rechner)
+### 2b. Echtes Inpainting (auf dem GPU-Rechner)
 
 ```bash
-./install_backend.sh        # venv + Moebius + torch/diffusers
+git clone https://github.com/Daniel-Steinberger/moebius-gimp.git
+cd moebius-gimp
+./install_backend.sh        # uv: Python 3.12 + Server-Deps + Moebius + torch/diffusers
 # danach Modellgewichte von Hugging Face laden (siehe Skript-Ausgabe)
 ./server/run_server.sh
+```
+
+Torch-Backend wählt uv automatisch (`--torch-backend=auto`). Falls die CUDA-/
+Treiberversion nicht zum Moebius-Pin passt, gezielt überschreiben, z. B.:
+
+```bash
+TORCH_BACKEND=cu128 ./install_backend.sh
 ```
 
 ### 3. In GIMP benutzen

@@ -1,0 +1,24 @@
+[project]
+name = "moebius-gimp-server"
+version = "1.0.0"
+description = "HTTP-API-Server, der Moebius-Inpainting für das GIMP-Plugin bereitstellt"
+readme = "README.md"
+license = "Apache-2.0"
+# Der Server selbst (inkl. Mock-Modus) läuft auf 3.10+. ACHTUNG: Für den ECHTEN
+# Moebius-Betrieb muss das venv mit einer Moebius-kompatiblen Python-Version
+# (3.10–3.12) erzeugt werden – siehe install_backend.sh. torch 2.7.x hat keine
+# Wheels für Python 3.13/3.14.
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pillow>=10.0",
+    "numpy>=1.24",
+    "pydantic>=2.0",
+]
+
+[tool.uv]
+# Wir verpacken unseren Code nicht als installierbares Paket – uv soll nur die
+# Abhängigkeiten ins venv legen. server.py/moebius_backend.py werden direkt
+# ausgeführt (uv run python server/server.py).
+package = false

@@ -1,40 +1,56 @@
 #!/usr/bin/env bash
-# Richtet das Backend (Moebius-API-Server) ein.
+# Richtet das Backend (Moebius-API-Server) mit uv ein.
+# Gedacht für den GPU-Rechner (z. B. pc-ai-gpu).
 #
 # Was dieses Skript tut:
-#   1. legt ein venv (.venv) an und installiert die SERVER-Abhängigkeiten
-#      (fastapi/uvicorn/pillow – siehe server/requirements.txt)
-#   2. klont das Moebius-Repo (falls nicht vorhanden) nach ./Moebius
-#   3. installiert die MOEBIUS-eigenen Abhängigkeiten (torch, diffusers, …)
+#   1. stellt mit uv eine MOEBIUS-KOMPATIBLE Python-Version bereit (Default 3.12)
+#      -> torch 2.7.x hat KEINE Wheels für Python 3.13/3.14!
+#   2. erzeugt das .venv und installiert die Server-Deps aus pyproject.toml (uv sync)
+#   3. klont das Moebius-Repo nach ./Moebius
+#   4. installiert die Moebius-Deps (torch, diffusers …) in DASSELBE venv,
+#      mit passendem Torch-Backend (CUDA automatisch erkannt)
 #
 # Was dieses Skript NICHT tut (bewusst – mehrere GB):
-#   - die Modellgewichte von Hugging Face herunterladen  -> siehe Hinweis unten
+#   - die Modellgewichte von Hugging Face herunterladen -> Hinweis am Ende
 #
-# Für GPU-Betrieb auf diesem oder einem entfernten Rechner ausführen.
+# Konfigurierbar per Umgebungsvariablen:
+#   PYVER          Python-Version fürs venv          (Default 3.12)
+#   TORCH_BACKEND  uv --torch-backend: auto|cpu|cu121|cu124|cu128|cu130 (Default auto)
+#   MOEBIUS_REPO   Git-URL des Moebius-Repos
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PY="${PYTHON:-python3}"
+PYVER="${PYVER:-3.12}"
+TORCH_BACKEND="${TORCH_BACKEND:-auto}"
 MOEBIUS_REPO="${MOEBIUS_REPO:-https://github.com/hustvl/Moebius.git}"
 
-echo "[1/3] venv anlegen + Server-Deps installieren …"
-"$PY" -m venv .venv
-# shellcheck disable=SC1091
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r server/requirements.txt
+command -v uv >/dev/null 2>&1 || {
+    echo "FEHLER: uv ist nicht installiert. Siehe https://docs.astral.sh/uv/" >&2
+    exit 1
+}
 
-echo "[2/3] Moebius-Quelle bereitstellen …"
+echo "[1/4] Python ${PYVER} via uv bereitstellen …"
+uv python install "${PYVER}"
+
+echo "[2/4] venv + Server-Deps (pyproject.toml) installieren …"
+uv sync --python "${PYVER}"
+VENV_PY="$(pwd)/.venv/bin/python"
+
+echo "[3/4] Moebius-Quelle bereitstellen …"
 if [[ ! -d Moebius ]]; then
-    git clone "$MOEBIUS_REPO" Moebius
+    git clone "${MOEBIUS_REPO}" Moebius
 else
     echo "      ./Moebius existiert bereits – überspringe Klonen."
 fi
 
-echo "[3/3] Moebius-Abhängigkeiten installieren (torch, diffusers …) …"
+echo "[4/4] Moebius-Deps (torch/diffusers …) ins venv installieren (Backend: ${TORCH_BACKEND}) …"
 if [[ -f Moebius/requirements.txt ]]; then
-    echo "      Hinweis: Für CUDA ggf. den passenden torch-Build von pytorch.org wählen."
-    pip install -r Moebius/requirements.txt
+    # --torch-backend lässt uv den passenden PyTorch-Index wählen (CUDA-Version).
+    # Hinweis: Moebius pinnt evtl. einen exakten +cuXXX-Build. Passt das nicht zur
+    # CUDA-/Treiberversion dieses Rechners, TORCH_BACKEND passend setzen.
+    uv pip install --python "${VENV_PY}" \
+        --torch-backend="${TORCH_BACKEND}" \
+        -r Moebius/requirements.txt
 else
     echo "      WARNUNG: Moebius/requirements.txt nicht gefunden – bitte manuell prüfen."
 fi
@@ -52,9 +68,9 @@ NOCH ZU TUN – Modellgewichte (manuell, mehrere GB):
   VAE von https://huggingface.co/hustvl/PixelHacker/tree/main/vae nach:
     ./Moebius/weight/vae/
 
-  Beispiel mit huggingface-cli:
-    pip install -U "huggingface_hub[cli]"
-    huggingface-cli download hustvl/Moebius --local-dir ./Moebius/weight/Moebius
+  Beispiel:
+    uvx --from "huggingface_hub[cli]" hf download hustvl/Moebius \
+        --local-dir ./Moebius/weight/Moebius
 
 Server starten:
     ./server/run_server.sh              # echter Modus

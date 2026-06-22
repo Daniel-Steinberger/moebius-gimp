@@ -1,33 +1,34 @@
 #!/usr/bin/env bash
-# Startet den Moebius-Inpainting-API-Server.
+# Startet den Moebius-Inpainting-API-Server (uv-basiert).
 #
-# Verwendung:
-#   ./run_server.sh                # echter Modus (braucht Moebius + Gewichte)
-#   ./run_server.sh --mock         # Mock-Modus (ohne torch/GPU, nur Pfad-Test)
-#   PORT=9000 ./run_server.sh      # anderer Port
+# Verwendung (vom Projekt-Root oder aus server/ heraus):
+#   ./server/run_server.sh                # echter Modus (braucht Moebius + Gewichte)
+#   ./server/run_server.sh --mock         # Mock-Modus (ohne torch/GPU, nur Pfad-Test)
+#   PORT=9000 ./server/run_server.sh      # anderer Port
 #
 # Relevante Umgebungsvariablen (siehe moebius_backend.py):
-#   MOEBIUS_SRC      Pfad zur geklonten Moebius-Quelle (Default: ../Moebius)
+#   MOEBIUS_SRC      Pfad zur geklonten Moebius-Quelle (Default: ./Moebius)
 #   MOEBIUS_WEIGHTS  Pfad zu den Gewichten (Default: $MOEBIUS_SRC/weight)
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# Projekt-Root (Verzeichnis über server/).
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8765}"
 
-# venv aktivieren, falls vorhanden (von install_backend.sh angelegt).
-if [[ -f "../.venv/bin/activate" ]]; then
-    # shellcheck disable=SC1091
-    source "../.venv/bin/activate"
-fi
+command -v uv >/dev/null 2>&1 || { echo "FEHLER: uv nicht installiert." >&2; exit 1; }
 
+ARGS=(--host "${HOST}" --port "${PORT}")
 if [[ "${1:-}" == "--mock" ]]; then
-    export MOEBIUS_MOCK=1
+    ARGS+=(--mock)
     echo "[moebius] Starte im MOCK-Modus (kein torch/GPU) auf ${HOST}:${PORT}"
 else
     echo "[moebius] Starte echten Modus auf ${HOST}:${PORT}"
-    echo "[moebius]   MOEBIUS_SRC=${MOEBIUS_SRC:-../Moebius}"
+    echo "[moebius]   MOEBIUS_SRC=${MOEBIUS_SRC:-./Moebius}"
 fi
 
-exec uvicorn server:app --host "${HOST}" --port "${PORT}"
+# --no-sync: NICHT erneut auflösen/prunen – sonst würden die per 'uv pip install'
+# zusätzlich installierten Moebius-Deps (torch, diffusers) entfernt.
+exec uv run --no-sync python server/server.py "${ARGS[@]}"
