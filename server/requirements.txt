@@ -1,0 +1,8 @@
+# Abhängigkeiten des Moebius-API-Servers (NICHT die von Moebius selbst).
+# Moebius-eigene Deps (torch, diffusers, transformers, flash-linear-attention)
+# kommen aus dem geklonten Moebius-Repo via dessen requirements.txt.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pillow>=10.0
+numpy>=1.24
+pydantic>=2.0
