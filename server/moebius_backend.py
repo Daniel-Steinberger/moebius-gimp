@@ -77,6 +77,10 @@ MODEL_VARIANTS = {
 }
 DEFAULT_VARIANT = "places2"
 
+# Moebius arbeitet intern quadratisch bei dieser Auflösung (moebius.yaml:
+# data.image_size = 512). Die λ-Attention setzt ein quadratisches Latent voraus.
+MODEL_RES = 512
+
 
 @dataclass
 class InpaintParams:
@@ -281,14 +285,23 @@ def run_inpaint(image: Image.Image, mask: Image.Image, params: InpaintParams) ->
     # RemovalSDXLPipeline_BatchMode.__call__(input_image_list, input_mask_list,
     #   image_size=512, num_steps, guidance_scale, paste, compensate, noise_offset, …)
     # nimmt Listen von PIL-Bildern und liefert eine Liste von PIL-Ergebnissen.
-    # Die Maske wird intern auf image_size skaliert/binarisiert; weiß = füllen.
-    # Die Inferenz wird serialisiert (eine GPU, ein Modell im Cache).
+    #
+    # WICHTIG: Moebius' λ-Attention erwartet ein QUADRATISCHES Latent. Der
+    # offizielle Weg (SimpleInferDataset) skaliert Bild+Maske hart auf
+    # MODEL_RES×MODEL_RES (512). Bei nicht-quadratischen Bildern bricht es sonst
+    # mit einem rearrange-Shape-Mismatch ab. Wir skalieren deshalb auf 512²,
+    # rechnen, skalieren zurück und komponieren über die Maske – so bleibt der
+    # Bereich AUSSERHALB der Auswahl pixelgenau das Original.
+    orig_size = image.size  # (W, H)
+    img_sq = image.resize((MODEL_RES, MODEL_RES), Image.BICUBIC)
+    mask_sq = mask.resize((MODEL_RES, MODEL_RES), Image.NEAREST)
+
     pipe = _CACHE.get(params.model)
-    with _CACHE._lock:
+    with _CACHE._lock:  # eine GPU, ein gecachtes Modell -> Inferenz serialisieren
         out = pipe(
-            [image],
-            [mask],
-            image_size=512,
+            [img_sq],
+            [mask_sq],
+            image_size=MODEL_RES,
             num_steps=params.num_steps,
             guidance_scale=params.cfg,
             paste=params.paste,
@@ -299,7 +312,11 @@ def run_inpaint(image: Image.Image, mask: Image.Image, params: InpaintParams) ->
     if not isinstance(result, Image.Image):
         # Falls Moebius einen Tensor/ndarray zurückgibt -> nach PIL wandeln.
         result = _to_pil(result)
-    return result.convert("RGB")
+    result = result.convert("RGB").resize(orig_size, Image.BICUBIC)
+
+    # Nur die Auswahl ersetzen; außerhalb das pristine Original behalten.
+    mask_bin = mask.point(lambda v: 255 if v >= 128 else 0)
+    return Image.composite(result, image, mask_bin)
 
 
 # ---------------------------------------------------------------------------
